@@ -25,9 +25,8 @@ def save_state(state):
         json.dump(state, f, ensure_ascii=False, indent=2)
 
 def get_price(url):
-    print(f"-> Opening anti-detect Playwright browser for: {url}")
+    print(f"-> Opening advanced Playwright browser for: {url}")
     with sync_playwright() as p:
-        # הפעלה עם הגדרות שמסוות את הבוט
         browser = p.chromium.launch(
             headless=True,
             args=[
@@ -44,60 +43,56 @@ def get_price(url):
         )
         
         page = context.new_page()
-        
-        # הזרקת קוד שמסיר את סימני ה-Webdriver המוכרים
         page.add_init_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
         
         # כניסה לאתר
         page.goto(url, wait_until="domcontentloaded", timeout=45000)
-        
         print(f"-> Page base loaded. Title: '{page.title()}'")
         
-        # המתן עד שהסלקטור של המחיר הראשי יופיע פיזית בדף
-        price_selector = ".price-wrapper [data-price-amount]"
-        try:
-            page.wait_for_selector(price_selector, timeout=10000)
-            print("-> Price selector appeared on page!")
-        except Exception:
-            print("-> Primary price selector didn't appear, trying generic backup wait...")
-            page.wait_for_timeout(4000) # גיבוי קל במקרה והמבנה מעט שונה במוצר הזה
-
-        # שליפת תוכן ה-HTML המעודכן לאחר הרינדור
-        html_content = page.content()
-        browser.close()
-
-    # חילוץ המחיר באמצעות BeautifulSoup
-    from bs4 import BeautifulSoup
-    soup = BeautifulSoup(html_content, "html.parser")
-    
-    # בדיקה קודם כל בתגי המטא המדויקים של המוצר
-    price_meta = soup.find("meta", property="product:price:amount") or soup.find("meta", itemprop="price")
-    
-    if price_meta and price_meta.get("content"):
-        price_text = price_meta["content"]
-        print(f"-> Found price in meta tags: {price_text}")
-    else:
-        # סלקטורים ממוקדים לאורבניקה
+        # המתנה יזומה קצרה שכל ה-JS ירוץ
+        page.wait_for_timeout(6000)
+        
+        # ניסיון חילוץ טקסט ישירות דרך Playwright באמצעות כמה סלקטורים אפשריים
+        price_text = None
         selectors = [
             ".price-wrapper [data-price-amount]",
             "[data-price-type='finalPrice'] .price",
             ".product-info-main .price",
-            ".final-price .price",
             ".price"
         ]
-        price_text = None
+        
         for sel in selectors:
-            el = soup.select_one(sel)
-            if el:
-                price_text = el.get_text()
-                print(f"-> Found price using selector '{sel}': {price_text}")
-                break
+            try:
+                # בודק אם האלמנט קיים ונראה לעין
+                el = page.locator(sel).first
+                if el.is_visible():
+                    price_text = el.inner_text()
+                    print(f"-> Playwright found price text with selector '{sel}': '{price_text}'")
+                    if price_text and any(c.isdigit() for c in price_text):
+                        break
+            except Exception as e:
+                print(f"-> Selector '{sel}' failed or not found: {str(e)}")
+                continue
+
+        # אם עדיין לא מצאנו, נדפיס קצת טקסט מהגוף של האתר בשביל להבין מה הוא רואה
+        if not price_text:
+            try:
+                body_text = page.locator("body").inner_text()
+                print("-> Snippet of body text seen by browser:")
+                print(body_text[:500]) # מדפיס את 500 התווים הראשונים
+            except Exception:
+                pass
+                
+        browser.close()
 
     if not price_text or len(price_text.strip()) == 0:
-        raise Exception("Price not found - Structure changed or Cloudflare block")
+        raise Exception("Price element missing or empty on render")
 
-    # ניקוי המחיר והפיכה למספר
+    # ניקוי והמרת המחיר למספר
     clean_price = "".join([c for c in price_text if c.isdigit() or c == '.'])
+    if not clean_price:
+        raise Exception(f"No digits found in price text: '{price_text}'")
+        
     price = int(float(clean_price))
     return price
     
