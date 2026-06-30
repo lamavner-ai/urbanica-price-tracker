@@ -25,7 +25,36 @@ def save_state(state):
         json.dump(state, f, ensure_ascii=False, indent=2)
 
 def get_price(url):
-    print(f"-> Opening advanced Playwright browser for: {url}")
+    # 1. ניסיון פנייה ישירה ל-API הפנימי של אורבניקה (הכי יציב ומהיר)
+    try:
+        print("-> Attempting to fetch price via internal Magento API...")
+        # אורבניקה בנויה על מג'נטו. ננסה לחלץ את ה-URL Key מהכתובת
+        url_clean = url.split('?')[0].rstrip('/')
+        product_key = url_clean.split('/')[-1].replace('.html', '')
+        
+        # כתובת ה-API הטיפוסית לקבלת מידע על מוצר במערכות אלו
+        api_url = f"https://www.urbanica-wh.com/rest/V1/products-renderinfo?searchCriteria[filterGroups][0][filters][0][field]=url_key&searchCriteria[filterGroups][0][filters][0][value]={product_key}"
+        
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+            "Accept": "application/json"
+        }
+        
+        res = requests.get(api_url, headers=headers, timeout=15)
+        if res.status_code == 200:
+            data = res.json()
+            # ניקוי וסריקה של ה-JSON למציאת שדות מחיר
+            if "items" in data and len(data["items"]) > 0:
+                price_info = data["items"][0].get("price_info", {})
+                final_price = price_info.get("final_price") or price_info.get("regular_price")
+                if final_price is not None:
+                    print(f"-> Success via API! Found price: {final_price}")
+                    return int(float(final_price))
+    except Exception as api_err:
+        print(f"-> Internal API attempt skipped or failed: {str(api_err)}")
+
+    # 2. גיבוי - במידה וה-API נכשל, ננסה את ה-Playwright המתוחכם
+    print(f"-> Falling back to advanced Playwright browser for: {url}")
     with sync_playwright() as p:
         browser = p.chromium.launch(
             headless=True,
@@ -35,24 +64,17 @@ def get_price(url):
                 '--disable-setuid-sandbox'
             ]
         )
-        
         context = browser.new_context(
             user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
             locale="he-IL",
             viewport={"width": 1920, "height": 1080}
         )
-        
         page = context.new_page()
         page.add_init_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
         
-        # כניסה לאתר
         page.goto(url, wait_until="domcontentloaded", timeout=45000)
-        print(f"-> Page base loaded. Title: '{page.title()}'")
-        
-        # המתנה יזומה קצרה שכל ה-JS ירוץ
         page.wait_for_timeout(6000)
         
-        # ניסיון חילוץ טקסט ישירות דרך Playwright באמצעות כמה סלקטורים אפשריים
         price_text = None
         selectors = [
             ".price-wrapper [data-price-amount]",
@@ -63,38 +85,21 @@ def get_price(url):
         
         for sel in selectors:
             try:
-                # בודק אם האלמנט קיים ונראה לעין
                 el = page.locator(sel).first
                 if el.is_visible():
                     price_text = el.inner_text()
-                    print(f"-> Playwright found price text with selector '{sel}': '{price_text}'")
                     if price_text and any(c.isdigit() for c in price_text):
                         break
-            except Exception as e:
-                print(f"-> Selector '{sel}' failed or not found: {str(e)}")
-                continue
-
-        # אם עדיין לא מצאנו, נדפיס קצת טקסט מהגוף של האתר בשביל להבין מה הוא רואה
-        if not price_text:
-            try:
-                body_text = page.locator("body").inner_text()
-                print("-> Snippet of body text seen by browser:")
-                print(body_text[:500]) # מדפיס את 500 התווים הראשונים
             except Exception:
-                pass
+                continue
                 
         browser.close()
 
-    if not price_text or len(price_text.strip()) == 0:
-        raise Exception("Price element missing or empty on render")
+    if not price_text:
+        raise Exception("Price not found - Cloudflare wall blocking the server")
 
-    # ניקוי והמרת המחיר למספר
     clean_price = "".join([c for c in price_text if c.isdigit() or c == '.'])
-    if not clean_price:
-        raise Exception(f"No digits found in price text: '{price_text}'")
-        
-    price = int(float(clean_price))
-    return price
+    return int(float(clean_price))
     
 def send_telegram(message):
     url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
