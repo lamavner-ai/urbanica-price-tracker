@@ -1,3 +1,26 @@
+def main():
+    print("--- Starting Tracker Script ---")
+    products = load_products()
+    print(f"Loaded {len(products)} products from JSON.")
+
+    state = load_state()
+    now = datetime.now().strftime("%d/%m/%Y %H:%M")
+
+    for product in products:
+        name = product["name"]
+        url = product["url"]
+        print(f"Checking price for: {name}...")
+
+        try:
+            price = get_price(url)
+            print(f"Successfully found price: {price}")
+        except Exception as e:
+            print(f"❌ Python Error for {name}: {str(e)}")
+            print("Trying to send error to Telegram...")
+            send_telegram(f"❌ Error for {name}: {str(e)}")
+            continue
+            
+        # ... שאר הקוד שלך ...
 def get_price(url):
     # כותרות מלאות כדי להיראות כמו דפדפן אמיתי
     headers = {
