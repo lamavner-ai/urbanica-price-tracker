@@ -25,38 +25,58 @@ def save_state(state):
         json.dump(state, f, ensure_ascii=False, indent=2)
 
 def get_price(url):
-    print(f"-> Opening Playwright browser for: {url}")
+    print(f"-> Opening anti-detect Playwright browser for: {url}")
     with sync_playwright() as p:
-        # הפעלת דפדפן Chromium
-        browser = p.chromium.launch(headless=True)
-        # התחזות מלאה לדפדפן רגיל כולל שפה ומערכת הפעלה
-        context = browser.new_context(
-            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-            locale="he-IL"
+        # הפעלה עם הגדרות שמסוות את הבוט
+        browser = p.chromium.launch(
+            headless=True,
+            args=[
+                '--disable-blink-features=AutomationControlled',
+                '--no-sandbox',
+                '--disable-setuid-sandbox'
+            ]
         )
+        
+        context = browser.new_context(
+            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+            locale="he-IL",
+            viewport={"width": 1920, "height": 1080}
+        )
+        
         page = context.new_page()
         
-        # כניסה לאתר והמתנה לטעינה מלאה
-        page.goto(url, wait_until="domcontentloaded", timeout=30000)
+        # הזרקת קוד שמסיר את סימני ה-Webdriver המוכרים
+        page.add_init_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
         
-        # שליפת תוכן ה-HTML
+        # כניסה לאתר
+        page.goto(url, wait_until="networkidle", timeout=45000)
+        
+        # הדפסת כותרת העמוד לביקורת ב-Logs
+        print(f"-> Page loaded. Title: '{page.title()}'")
+        
+        # המתנה קלה נוספת לרינדור המחיר
+        page.wait_for_timeout(5000)
+        
         html_content = page.content()
         browser.close()
 
-    # שימוש בטקסט שחזר כדי לחלץ את המחיר מתגי המטא
+    # חילוץ המחיר באמצעות BeautifulSoup
     from bs4 import BeautifulSoup
     soup = BeautifulSoup(html_content, "html.parser")
     
+    # בדיקה קודם כל בתגי המטא המדויקים של המוצר
     price_meta = soup.find("meta", property="product:price:amount") or soup.find("meta", itemprop="price")
     
     if price_meta and price_meta.get("content"):
         price_text = price_meta["content"]
         print(f"-> Found price in meta tags: {price_text}")
     else:
+        # סלקטורים ממוקדים לאורבניקה
         selectors = [
             ".price-wrapper [data-price-amount]",
-            ".final-price .price",
             "[data-price-type='finalPrice'] .price",
+            ".product-info-main .price",
+            ".final-price .price",
             ".price"
         ]
         price_text = None
@@ -67,13 +87,14 @@ def get_price(url):
                 print(f"-> Found price using selector '{sel}': {price_text}")
                 break
 
-    if not price_text:
-        raise Exception("Price not found - HTML structure changed or bot still detected")
+    if not price_text or len(price_text.strip()) == 0:
+        raise Exception("Price not found - Structure changed or Cloudflare block")
 
+    # ניקוי המחיר והפיכה למספר
     clean_price = "".join([c for c in price_text if c.isdigit() or c == '.'])
     price = int(float(clean_price))
     return price
-
+    
 def send_telegram(message):
     url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
     payload = {
