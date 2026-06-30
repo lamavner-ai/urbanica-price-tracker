@@ -51,12 +51,18 @@ def get_price(url):
         # כניסה לאתר
         page.goto(url, wait_until="domcontentloaded", timeout=45000)
         
-        # הדפסת כותרת העמוד לביקורת ב-Logs
-        print(f"-> Page loaded. Title: '{page.title()}'")
+        print(f"-> Page base loaded. Title: '{page.title()}'")
         
-        # המתנה קלה נוספת לרינדור המחיר
-        page.wait_for_timeout(5000)
-        
+        # המתן עד שהסלקטור של המחיר הראשי יופיע פיזית בדף
+        price_selector = ".price-wrapper [data-price-amount]"
+        try:
+            page.wait_for_selector(price_selector, timeout=10000)
+            print("-> Price selector appeared on page!")
+        except Exception:
+            print("-> Primary price selector didn't appear, trying generic backup wait...")
+            page.wait_for_timeout(4000) # גיבוי קל במקרה והמבנה מעט שונה במוצר הזה
+
+        # שליפת תוכן ה-HTML המעודכן לאחר הרינדור
         html_content = page.content()
         browser.close()
 
