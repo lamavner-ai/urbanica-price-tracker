@@ -49,7 +49,7 @@ def get_price(url):
         page.add_init_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
         
         # כניסה לאתר
-        page.goto(url, wait_until="networkidle", timeout=45000)
+        page.goto(url, wait_until="domcontentloaded", timeout=45000)
         
         # הדפסת כותרת העמוד לביקורת ב-Logs
         print(f"-> Page loaded. Title: '{page.title()}'")
