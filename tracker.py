@@ -25,79 +25,59 @@ def save_state(state):
         json.dump(state, f, ensure_ascii=False, indent=2)
 
 def get_price(url):
-    # 1. ניסיון פנייה ישירה ל-API הפנימי של אורבניקה (הכי יציב ומהיר)
-    try:
-        print("-> Attempting to fetch price via internal Magento API...")
-        # אורבניקה בנויה על מג'נטו. ננסה לחלץ את ה-URL Key מהכתובת
-        url_clean = url.split('?')[0].rstrip('/')
-        product_key = url_clean.split('/')[-1].replace('.html', '')
+    import urllib.parse
+    
+    # משיכת הטוקן החדש מה-Secrets
+    scrape_token = os.getenv("SCRAPE_DO_TOKEN")
+    
+    if not scrape_token:
+        print("⚠️ SCRAPE_DO_TOKEN is missing! Trying direct fetch as backup...")
+        # אם שכחת להגדיר את ה-Secret, ננסה גישה ישירה (לרוב תיכשל בגלל Cloudflare)
+        res = requests.get(url, headers={"User-Agent": "Mozilla/5.0"}, timeout=15)
+        html_content = res.text
+    else:
+        print("-> Fetching page safely through Scrape.do bypass proxy...")
+        # קידוד הכתובת של אורבניקה כך שתתאים לפרוקסי
+        encoded_url = urllib.parse.quote_plus(url)
+        proxy_url = f"https://api.scrape.do?token={scrape_token}&url={encoded_url}"
         
-        # כתובת ה-API הטיפוסית לקבלת מידע על מוצר במערכות אלו
-        api_url = f"https://www.urbanica-wh.com/rest/V1/products-renderinfo?searchCriteria[filterGroups][0][filters][0][field]=url_key&searchCriteria[filterGroups][0][filters][0][value]={product_key}"
-        
-        headers = {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-            "Accept": "application/json"
-        }
-        
-        res = requests.get(api_url, headers=headers, timeout=15)
-        if res.status_code == 200:
-            data = res.json()
-            # ניקוי וסריקה של ה-JSON למציאת שדות מחיר
-            if "items" in data and len(data["items"]) > 0:
-                price_info = data["items"][0].get("price_info", {})
-                final_price = price_info.get("final_price") or price_info.get("regular_price")
-                if final_price is not None:
-                    print(f"-> Success via API! Found price: {final_price}")
-                    return int(float(final_price))
-    except Exception as api_err:
-        print(f"-> Internal API attempt skipped or failed: {str(api_err)}")
+        res = requests.get(proxy_url, timeout=30)
+        print(f"-> Proxy Response Status: {res.status_code}")
+        html_content = res.text
 
-    # 2. גיבוי - במידה וה-API נכשל, ננסה את ה-Playwright המתוחכם
-    print(f"-> Falling back to advanced Playwright browser for: {url}")
-    with sync_playwright() as p:
-        browser = p.chromium.launch(
-            headless=True,
-            args=[
-                '--disable-blink-features=AutomationControlled',
-                '--no-sandbox',
-                '--disable-setuid-sandbox'
-            ]
-        )
-        context = browser.new_context(
-            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
-            locale="he-IL",
-            viewport={"width": 1920, "height": 1080}
-        )
-        page = context.new_page()
-        page.add_init_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
-        
-        page.goto(url, wait_until="domcontentloaded", timeout=45000)
-        page.wait_for_timeout(6000)
-        
-        price_text = None
+    # חילוץ המחיר באמצעות BeautifulSoup הרגיל והטוב
+    from bs4 import BeautifulSoup
+    soup = BeautifulSoup(html_content, "html.parser")
+    
+    # ננסה לשלוף ישירות מתג המטא הרשמי שאורבניקה שותלת
+    price_meta = soup.find("meta", property="product:price:amount") or soup.find("meta", itemprop="price")
+    
+    if price_meta and price_meta.get("content"):
+        price_text = price_meta["content"]
+        print(f"-> Found price in meta tags: {price_text}")
+    else:
+        # סלקטורים חלופיים בתוך ה-HTML
         selectors = [
             ".price-wrapper [data-price-amount]",
             "[data-price-type='finalPrice'] .price",
             ".product-info-main .price",
             ".price"
         ]
-        
+        price_text = None
         for sel in selectors:
-            try:
-                el = page.locator(sel).first
-                if el.is_visible():
-                    price_text = el.inner_text()
-                    if price_text and any(c.isdigit() for c in price_text):
-                        break
-            except Exception:
-                continue
-                
-        browser.close()
+            el = soup.select_one(sel)
+            if el:
+                price_text = el.get_text()
+                print(f"-> Found price using selector '{sel}': {price_text}")
+                break
 
-    if not price_text:
-        raise Exception("Price not found - Cloudflare wall blocking the server")
+    if not price_text or len(price_text.strip()) == 0:
+        # הדפסת דיבאג קטנה לראות מה חזר במקרה של כשל
+        print("-> Sample HTML structure received:")
+        print(html_content[:400])
+        raise Exception("Price element not found in HTML")
 
+    # ניקוי המחיר והפיכה למספר
     clean_price = "".join([c for c in price_text if c.isdigit() or c == '.'])
     return int(float(clean_price))
     
